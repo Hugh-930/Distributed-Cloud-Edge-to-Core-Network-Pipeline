@@ -19,7 +19,7 @@ class Packet:
     current_node_arrival_time: float = 0.0
 
 
-@dataclass
+@dataclass(order=True)
 class Event:
     """
     Represents a discrete event in the simulation (either an arrival or departure).
@@ -42,6 +42,7 @@ class BaseNode:
         name: str,
         num_servers: int,
         rng: Optional[np.random.Generator] = None,
+        completed_packets: int = 0,
         capacity: float = float("inf"),
     ):
         self.node_id = node_id
@@ -100,12 +101,16 @@ class Node1(BaseNode):
         mean_ms: float = 4.0,
         std_ms: float = 1.2,
         rng: Optional[np.random.Generator] = None,
+        completed_packets: int = 0,
         arrival_rng: Optional[np.random.Generator] = None,
+        latencies: List[float] = None,
     ):
         super().__init__(node_id=1, name="Node 1: Ingress Edge Router", num_servers=num_servers, rng=rng)
         self.mean_ms = mean_ms
         self.std_ms = std_ms
+        self.completed_packets = completed_packets
         self.arrival_rng = arrival_rng if arrival_rng is not None else np.random.default_rng()
+        self.latencies: List[float] = latencies if latencies is not None else []
 
         # Convert arithmetic mean (4.0 ms) and std (1.2 ms) to underlying normal parameters (mu_N, sigma_N)
         variance = self.std_ms ** 2
@@ -118,33 +123,27 @@ class Node1(BaseNode):
         self.period_ms = 24000.0  # Sinusoidal cycle across simulation window
         self.lambda_max = self.base_arrival_rate + self.spike_amplitude
 
-    def sample_arrival_time(self, t_ms: float) -> float:
+    def sample_arrival_time(self, current_time_ms: float) -> float:
         """
-        max_rate = base_rate + spike_amplitude
-        min_rate = base_rate - spike_amplitude
-        1 cycle = 24 seconds
+        calculate the arrival rate and generate the next arrival time using  
+        Lewis-Shedler Thinning Algorithm for Non-Homogeneous Poisson Processes (NHPP).
         """
-        return self.base_arrival_rate + self.spike_amplitude * float(
-            np.sin(2.0 * np.pi * t_ms / self.period_ms)
-        )
-
-    def sample_next_arrival_time(self, current_time_ms: float) -> float:
-        # Generates the absolute timestamp of the next external packet arrival using the Lewis-Shedler Thinning Algorithm
-        
         t = current_time_ms
         while True:
-            # Step 1: Generate candidate arrival using upper bound homogeneous rate lambda_max
+
             u1 = self.arrival_rng.uniform(0.0, 1.0)
             t += -np.log(1.0 - u1) / self.lambda_max
 
-            # Step 2: Thinning / Acceptance-Rejection test with probability lambda(t) / lambda_max
+            rate = self.base_arrival_rate + self.spike_amplitude * float(
+                np.sin(2.0 * np.pi * t / self.period_ms)
+            )
             u2 = self.arrival_rng.uniform(0.0, 1.0)
-            if u2 <= (self.sample_arrival_time(t) / self.lambda_max):
+            if u2 <= (rate / self.lambda_max):
                 return t
 
     def sample_service_time(self) -> float:
         """Samples packet parsing time from Log-Normal(mean=4.0 ms, std=1.2 ms)."""
-        return float(self.rng.normal(mean=self.mu_normal, sigma=self.sigma_normal))
+        return float(self.rng.lognormal(mean=self.mu_normal, sigma=self.sigma_normal))
 
     def select_next_node(self) -> int:
         """All packets from Node 1 are forwarded to Node 2 (Deep Packet Inspection)."""
