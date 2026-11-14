@@ -343,7 +343,7 @@ class Node7(BaseNode):
 
     def __init__(
         self,
-        num_servers: int = 3,
+        num_servers: int = 4,
         a: float = 2.0,
         b: float = 5.0,
         rng: Optional[np.random.Generator] = None,
