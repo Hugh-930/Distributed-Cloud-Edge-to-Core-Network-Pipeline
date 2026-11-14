@@ -302,3 +302,60 @@ class Node5(BaseNode):
 
     def select_next_node(self, packet: Packet) -> int:
         return 7
+
+class Node6(BaseNode):
+    """
+    Node 6:  Security Quarantine & Threat Analysis (M/G/1 Queue)
+    - Servers:  s6 = 1 specialized threat-sandbox thread
+    - Service Time: Gamma distribution (α = 2.0,β = 5.0 ms)
+    - Routing: 100% -> Node 7 (Database Ingestion).
+    """
+
+    def __init__(
+        self,
+        num_servers: int = 1,
+        service_shape: float = 2.0,
+        service_scale: float = 5.0,
+        rng: Optional[np.random.Generator] = None,
+        routing_rng: Optional[np.random.Generator] = None,
+    ):
+        super().__init__(node_id=5, name="Node 5: Cluster B", num_servers=num_servers, rng=rng)
+        self.service_shape = service_shape
+        self.service_scale = service_scale
+        self.routing_rng = routing_rng if routing_rng is not None else np.random.default_rng(seed=SEED+5)
+
+    def sample_service_time(self) -> float:
+        u1 = self.rng.uniform(0.0, 1.0)
+        u2 = self.rng.uniform(0.0, 1.0)
+        
+        return float(-self.service_scale*(np.log(1-u1)+np.log(1-u2)))
+
+    def select_next_node(self, packet: Packet) -> int:
+        return 7
+
+class Node7(BaseNode):
+    """
+    Node 7: Database Ingestion Layer (G/G/s Queue)
+    - Servers:  s7 = 4 I/O write workers
+    - Service Time:  Uniform distribution (a = 2.0 ms,b = 5.0 ms)
+    - Routing: 100% -> Node 8 (Sink)
+    """
+
+    def __init__(
+        self,
+        num_servers: int = 3,
+        a: float = 2.0,
+        b: float = 5.0,
+        rng: Optional[np.random.Generator] = None,
+        routing_rng: Optional[np.random.Generator] = None,
+    ):
+        super().__init__(node_id=5, name="Node 5: Cluster B", num_servers=num_servers, rng=rng)
+        self.a = a
+        self.b = b
+        self.routing_rng = routing_rng if routing_rng is not None else np.random.default_rng(seed=SEED+5)
+
+    def sample_service_time(self) -> float:
+        return float(self.a + (self.b-self.a)*self.rng.uniform(0.0, 1.0))
+
+    def select_next_node(self, packet: Packet) -> int:
+        return 8
