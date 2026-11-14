@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 import numpy as np
 
+SEED = 3
 
 @dataclass
 class Packet:
@@ -41,15 +42,18 @@ class BaseNode:
         node_id: int,
         name: str,
         num_servers: int,
-        rng: Optional[np.random.Generator] = None,
         completed_packets: int = 0,
-        capacity: float = float("inf"),
+        rng: Optional[np.random.Generator] = None,
+        capacity: Optional[float] = float("inf"),
+        latencies: Optional[List[float]] = None
     ):
         self.node_id = node_id
         self.name = name
         self.num_servers = num_servers
+        self.completed_packets = completed_packets
+        self.rng = rng if rng is not None else np.random.default_rng(seed=SEED+node_id)
         self.capacity = capacity  # Finite buffer limit K (inf for unbounded queues)
-        self.rng = rng if rng is not None else np.random.default_rng()
+        self.latencies = latencies if latencies is not None else [] # List to store latencies for statistical analysis
 
         # Dynamic state variables
         self.busy_servers: int = 0
@@ -60,12 +64,6 @@ class BaseNode:
         self.area_num_in_queue: float = 0.0
         self.area_num_in_system: float = 0.0
         self.area_busy_servers: float = 0.0
-        self.area_blocked_servers: float = 0.0
-
-        self.total_queue_wait_time: float = 0.0
-        self.total_system_time: float = 0.0
-        self.arrived_packets: int = 0
-        self.completed_packets: int = 0
 
     @property
     def num_in_system(self) -> int:
@@ -78,11 +76,11 @@ class BaseNode:
         return self.num_in_system >= self.capacity
 
     def sample_service_time(self) -> float:
-        # Generates a random service duration in milliseconds. Overridden by subclasses.
+        """Generates a random service duration in milliseconds. Overridden by subclasses."""    
         raise NotImplementedError("Subclasses must implement sample_service_time().")
 
     def select_next_node(self, packet: Packet) -> int:
-        # Determines the downstream node ID after service completion. Overridden by subclasses.
+        """Determines the downstream node ID after service completion. Overridden by subclasses."""
         raise NotImplementedError("Subclasses must implement select_next_node().")
 
 
@@ -101,18 +99,14 @@ class Node1(BaseNode):
         mean_ms: float = 4.0,
         std_ms: float = 1.2,
         rng: Optional[np.random.Generator] = None,
-        completed_packets: int = 0,
-        arrival_rng: Optional[np.random.Generator] = None,
-        latencies: List[float] = None,
+        arrival_rng: Optional[np.random.Generator] = np.random.default_rng(seed=SEED+1),
     ):
         super().__init__(node_id=1, name="Node 1: Ingress Edge Router", num_servers=num_servers, rng=rng)
         self.mean_ms = mean_ms
         self.std_ms = std_ms
-        self.completed_packets = completed_packets
-        self.arrival_rng = arrival_rng if arrival_rng is not None else np.random.default_rng()
-        self.latencies: List[float] = latencies if latencies is not None else []
+        self.arrival_rng = arrival_rng 
 
-        # Convert arithmetic mean (4.0 ms) and std (1.2 ms) to underlying normal parameters (mu_N, sigma_N)
+        # Convert log-normal mean (4.0 ms) and std (1.2 ms) to normal parameters (mu_N, sigma_N)
         variance = self.std_ms ** 2
         self.sigma_normal = float(np.sqrt(np.log(1.0 + variance / (self.mean_ms ** 2))))
         self.mu_normal = float(np.log(self.mean_ms) - 0.5 * (self.sigma_normal ** 2))
@@ -120,7 +114,7 @@ class Node1(BaseNode):
         
         self.base_arrival_rate = 0.65
         self.spike_amplitude = 0.15
-        self.period_ms = 24000.0  # Sinusoidal cycle across simulation window
+        self.period_ms = 24000.0  # 1 cycle = 24 seconds
         self.lambda_max = self.base_arrival_rate + self.spike_amplitude
 
     def sample_arrival_time(self, current_time_ms: float) -> float:
@@ -143,14 +137,15 @@ class Node1(BaseNode):
 
     def sample_service_time(self) -> float:
         """Samples packet parsing time from Log-Normal(mean=4.0 ms, std=1.2 ms)."""
-        return float(self.rng.lognormal(mean=self.mu_normal, sigma=self.sigma_normal))
+        service_time = self.rng.lognormal(mean=self.mu_normal, sigma=self.sigma_normal)
+        return float(service_time)  
 
     def select_next_node(self) -> int:
         """All packets from Node 1 are forwarded to Node 2 (Deep Packet Inspection)."""
         return 2
 
 
-class Node2DPIFirewall(BaseNode):
+class Node2(BaseNode):
     """
     Node 2: Deep Packet Inspection (DPI) & Firewall (M/M/s Queue)
     - Servers: s2 = 2 dedicated inspection cores.
@@ -165,25 +160,21 @@ class Node2DPIFirewall(BaseNode):
         service_rate_per_ms: float = 0.5,
         clean_prob: float = 0.90,
         rng: Optional[np.random.Generator] = None,
-        routing_rng: Optional[np.random.Generator] = None,
+        routing_rng: Optional[np.random.Generator] = np.random.default_rng(seed=SEED+2),
     ):
         super().__init__(node_id=2, name="Node 2: DPI & Firewall", num_servers=num_servers, rng=rng)
         self.service_rate_per_ms = service_rate_per_ms
         self.mean_service_ms = 1.0 / service_rate_per_ms
         self.clean_prob = clean_prob
-        self.routing_rng = routing_rng if routing_rng is not None else self.rng
+        self.routing_rng = routing_rng
 
         self.blocked_packets: List[Packet] = []
         self.blocking_events_count: int = 0
         self.total_routing_attempts_to_n3: int = 0
 
-    def reset_stats(self) -> None:
-        super().reset_stats()
-        self.blocking_events_count = 0
-        self.total_routing_attempts_to_n3 = 0
-
     def sample_service_time(self) -> float:
-        return float(self.rng.exponential(scale=self.mean_service_ms))
+        u = self.rng.uniform(0.0, 1.0)
+        return float(-self.mean_service_ms * np.log(1.0 - u))
 
     def select_next_node(self, packet: Packet) -> int:
         if self.routing_rng.uniform(0.0, 1.0) < self.clean_prob:
@@ -193,60 +184,3 @@ class Node2DPIFirewall(BaseNode):
             packet.is_suspect = True
             return 6
 
-
-class Node3LoadBalancer(BaseNode):
-    """
-    Node 3: Central Load Balancer (M/G/s/K Finite-Buffer Queue)
-    - Buffer Capacity: K = 15 packets.
-    - Servers: s3 = 4 distribution threads.
-    - Service Time: Triangular distribution (min=1.0, mode=2.0, max=4.0 ms).
-    """
-
-    def __init__(
-        self,
-        num_servers: int = 4,
-        capacity: int = 15,
-        left_ms: float = 1.0,
-        mode_ms: float = 2.0,
-        right_ms: float = 4.0,
-        cluster_a_prob: float = 0.60,
-        rng: Optional[np.random.Generator] = None,
-        routing_rng: Optional[np.random.Generator] = None,
-    ):
-        super().__init__(
-            node_id=3,
-            name="Node 3: Central Load Balancer",
-            num_servers=num_servers,
-            rng=rng,
-            capacity=capacity,
-        )
-        self.left_ms = left_ms
-        self.mode_ms = mode_ms
-        self.right_ms = right_ms
-        self.cluster_a_prob = cluster_a_prob
-        self.routing_rng = routing_rng if routing_rng is not None else self.rng
-        self.area_buffer_full: float = 0.0
-
-    def update_time_avg_stats(self, dt: float) -> None:
-        super().update_time_avg_stats(dt)
-        if dt > 0.0 and self.is_full():
-            self.area_buffer_full += dt
-
-    def reset_stats(self) -> None:
-        super().reset_stats()
-        self.area_buffer_full = 0.0
-
-    def sample_service_time(self) -> float:
-        a, c, b = self.left_ms, self.mode_ms, self.right_ms
-        u = self.rng.uniform(0.0, 1.0)
-        split_point = (c - a) / (b - a)
-        if u <= split_point:
-            return float(a + np.sqrt(u * (b - a) * (c - a)))
-        else:
-            return float(b - np.sqrt((1.0 - u) * (b - a) * (b - c)))
-
-    def select_next_node(self, packet: Packet) -> int:
-        if self.routing_rng.uniform(0.0, 1.0) < self.cluster_a_prob:
-            return 4
-        else:
-            return 5
