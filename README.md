@@ -54,3 +54,22 @@ The terminal report shows completed packets, average queue wait and time spent *
 
 - **Node 3 capacity.** The code sets capacity to 15 packets, counting both queued packets and packets in service. The upstream blocking handler is a stub, so the engine can admit more than 15.
 - **Node 8 completions.** The sink has zero workers and queues incoming packets, so its completion count stays at zero. Use Node 7’s completed-packet count for the number of packets delivered to the sink. The report has no end-to-end latency metric.
+
+
+## what's currently missing in the code
+| Requirement | Current code | What’s missing or needs fixing |
+|---|---|---|
+| **Node 3 finite capacity and backpressure** | Capacity is set to 15, but `update_blocked_servers()` contains `pass`. Arrivals are admitted even when full. | Hold completed packets at upstream workers when Node 3 is full, keep those workers blocked, and release them when space becomes available. Track blocking statistics. |
+| **Node 7 has four workers** | `Node7.__init__()` defaults to **3**, despite its docstring saying 4. | Set the default to **4**. |
+| **Node 8 acknowledges departures** | Its zero servers cause every arriving packet to enter its queue permanently. | Handle sink arrivals as completed network departures and record their completion times. |
+| **Warm-up determination** | Statistics start at time zero. | Implement an algorithm such as Welch’s method, choose a warm-up duration, and reset measurement accumulators afterward while preserving network state. |
+| **8 independent replications** | One simulation runs with fixed seeds. | Create fresh nodes and independent random streams for each of eight runs. Reusing the global `nodes_dict` retains state. |
+| **48 seconds measured after warm-up** | Default duration is 10,000 ms. | Run each replication for the chosen warm-up plus **48,000 ms**, collecting results over the measurement interval. |
+| **Network throughput** | Only per-node departure rates are printed. | Count completed network departures during the measurement interval and divide by its duration. |
+| **Mean and 99th-percentile end-to-end latency** | `system_arrival_time` exists, but only per-node latency is recorded. | At the sink, calculate `completion_time - system_arrival_time`, then compute the mean and 99th percentile. |
+| **95% confidence intervals** | Reports contain single-run averages. | Aggregate replication-level estimates and calculate confidence intervals for the required metrics. |
+| **Utilization and Node 3 congestion** | Per-node utilization and average queue lengths are already calculated. | Measure them after warm-up, add confidence intervals, and report Node 3’s backpressure/blocking probability. |
+| **Little’s Law verification** | The code calculates quantities corresponding to \(L\), \(\lambda\), and \(W\), but never compares them. | Check \(L \approx \lambda W\) for Nodes 1–7, with consistent measurement boundaries and blocking time accounted for. |
+| **Bottleneck analysis** | No analysis workflow exists. | Compare utilization, delays, and upstream blocking to identify bottlenecks. |
+| **Two-core upgrade experiments** | Worker counts can be changed manually. | Evaluate a proposed allocation of two additional workers against **three alternative allocations**, using 99th-percentile end-to-end latency as the objective. |
+| **CRN and paired t-tests** | Separate RNGs exist for some processes, but there is no scenario-comparison runner. | Match random streams across designs within each replication, keep replications independent, and perform paired t-tests against the proposed allocation. |
