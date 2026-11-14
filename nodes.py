@@ -319,10 +319,10 @@ class Node6(BaseNode):
         rng: Optional[np.random.Generator] = None,
         routing_rng: Optional[np.random.Generator] = None,
     ):
-        super().__init__(node_id=5, name="Node 5: Cluster B", num_servers=num_servers, rng=rng)
+        super().__init__(node_id=5, name="Node  6:  Security Quarantine & Threat Analysis", num_servers=num_servers, rng=rng)
         self.service_shape = service_shape
         self.service_scale = service_scale
-        self.routing_rng = routing_rng if routing_rng is not None else np.random.default_rng(seed=SEED+5)
+        self.routing_rng = routing_rng if routing_rng is not None else np.random.default_rng(seed=SEED+6)
 
     def sample_service_time(self) -> float:
         u1 = self.rng.uniform(0.0, 1.0)
@@ -349,13 +349,27 @@ class Node7(BaseNode):
         rng: Optional[np.random.Generator] = None,
         routing_rng: Optional[np.random.Generator] = None,
     ):
-        super().__init__(node_id=5, name="Node 5: Cluster B", num_servers=num_servers, rng=rng)
+        super().__init__(node_id=7, name="Node 7: Database Ingestion", num_servers=num_servers, rng=rng)
         self.a = a
         self.b = b
-        self.routing_rng = routing_rng if routing_rng is not None else np.random.default_rng(seed=SEED+5)
+        self.routing_rng = routing_rng if routing_rng is not None else np.random.default_rng(seed=SEED+7)
 
     def sample_service_time(self) -> float:
         return float(self.a + (self.b-self.a)*self.rng.uniform(0.0, 1.0))
 
     def select_next_node(self, packet: Packet) -> int:
         return 8
+
+class Node8(BaseNode):
+    """
+    Node 8 : Sink
+    """
+
+    def __init__(self):
+        super().__init__(node_id=8, name="Node 8 : Sink", num_servers=0)
+
+    def sample_service_time(self) -> float:
+        raise NotImplementedError("Node 8 (Sink) does not process packets or have a service time.")
+
+    def select_next_node(self, packet: Packet) -> int:
+        raise NotImplementedError("Node 8 (Sink) is the terminal node and has no downstream node.")
