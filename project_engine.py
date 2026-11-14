@@ -1,7 +1,7 @@
 import heapq
 from typing import List 
 import numpy as np
-from nodes import Packet, Event, Node1, Node2, Node3, Node4, Node5
+from nodes import Packet, Event, Node1, Node2, Node3, Node4, Node5, Node6, Node7, Node8
 
 
 nodes_dict = {
@@ -10,9 +10,9 @@ nodes_dict = {
     3: Node3(),
     4: Node4(),
     5: Node5(),
-    # 6: Node6(),
-    # 7: Node7(),
-    # 8: Node8(),
+    6: Node6(),
+    7: Node7(),
+    8: Node8(),
 }
 
 class SimulationEngine:
@@ -76,10 +76,6 @@ class SimulationEngine:
         Schedules the next arrival and either starts service or queues the packet."""
 
         node_id = packet.current_node_id
-
-        # only for testing purposes, ignore arrivals for nodes that don't exist
-        if node_id not in self.nodes:
-            return
         node = self.nodes[node_id]
 
         # schedule the next arrival only for Node 1
@@ -154,8 +150,8 @@ class SimulationEngine:
         """Prints a summary report of the simulation results."""
         print("\nSimulation Report:")
         for node_id, node in self.nodes.items():
-            avg_queue_waiting_time = np.mean(node.queue_wait_times) # W_q
-            avg_time_in_system = np.mean(node.latencies) # W
+            avg_queue_waiting_time = np.mean(node.queue_wait_times) if len(node.queue_wait_times)>0 else 0.0 # W_q
+            avg_time_in_system = np.mean(node.latencies) if len(node.latencies)>0 else 0.0# W
             avg_num_in_queue = node.area_num_in_queue / self.sim_time # L_q
             avg_num_in_system = node.area_num_in_system / self.sim_time # L
             throughput = node.completed_packets / self.sim_time # lambda
