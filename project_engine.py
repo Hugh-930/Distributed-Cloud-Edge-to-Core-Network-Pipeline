@@ -1,10 +1,12 @@
 import heapq
-from nodes import Packet, Event, Node1, Node2
+from typing import List 
+from nodes import Packet, Event, Node1, Node2, Node3
+
 
 nodes_dict = {
     1: Node1(),
     2: Node2(),
-    # 3: Node3(),
+    3: Node3(),
     # 4: Node4(),
     # 5: Node5(),
     # 6: Node6(),
@@ -13,10 +15,11 @@ nodes_dict = {
 }
 
 class SimulationEngine:
-    def __init__(self, nodes_dict, sim_duration, max_packets):
+    def __init__(self, nodes_dict, sim_duration=None, max_packets=None, max_nodes=None):
         self.nodes = nodes_dict
         self.sim_duration = sim_duration if sim_duration is not None else float('inf')
         self.max_packets = max_packets if max_packets is not None else float('inf')
+        self.max_nodes = max_nodes if max_nodes is not None else len(nodes_dict)
         self.event_list = []
         self.sim_time = 0.0
         self.packet_id_counter = 0
@@ -60,13 +63,20 @@ class SimulationEngine:
 
         self.print_report()
 
+
+    def update_blocked_servers(self, upstream_nodes: List[int]):
+        """Updates the FEL for upstream nodes when a downstream node is full."""
+        for node_id in upstream_nodes:
+            if node_id in self.nodes:
+                pass
+
     def handle_arrival(self, packet: Packet):
         """Handles an arrival event for a packet. 
         Schedules the next arrival and either starts service or queues the packet."""
 
         node_id = packet.current_node_id
         node = self.nodes[node_id]
-        
+
         # schedule the next arrival only for Node 1
         if node_id == 1 and self.packet_id_counter < self.max_packets:
             self.packet_id_counter += 1
@@ -81,6 +91,10 @@ class SimulationEngine:
         else:
             node.queue.append(packet)
 
+        # If the buffer is full, update the upstream nodes' FEL
+        if node.num_in_system >= node.capacity:
+            self.update_blocked_servers(node.upstream_nodes)
+
     def handle_departure(self, packet: Packet):
         node_id = packet.current_node_id
         node = self.nodes[node_id]
@@ -89,12 +103,12 @@ class SimulationEngine:
         latency = self.sim_time - packet.current_node_arrival_time
         node.latencies.append(latency)
 
-        if node_id < 2:
+        if node_id < self.max_nodes:
             # Move the packet to the next node, update its info
             packet.current_node_arrival_time = self.sim_time
             packet.current_node_id += 1  # Move to the next node
             packet.current_node_arrival_time = self.sim_time
-            self.schedule_event(self.sim_time, "ARRIVAL", packet)
+            self.handle_arrival(packet)
         else:
             # Packet has completed processing through all nodes
             pass
@@ -131,12 +145,12 @@ class SimulationEngine:
         """Prints a summary report of the simulation results."""
         print("\nSimulation Report:")
         for node_id, node in self.nodes.items():
-            avg_queue_waiting_time = node.area_num_in_queue / node.completed_packets if node.completed_packets > 0 else 0.0 # W_q
-            avg_time_in_system = node.area_num_in_system / node.completed_packets if node.completed_packets > 0 else 0.0 # W
+            avg_queue_waiting_time = node.area_num_in_queue / self.sim_time if self.sim_time > 0 else 0.0 # W_q
+            avg_time_in_system = node.area_num_in_system / self.sim_time if self.sim_time > 0 else 0.0 # W
             avg_num_in_queue = node.area_num_in_queue / self.sim_time # L_q
             avg_num_in_system = node.area_num_in_system / self.sim_time
             avg_busy_servers = node.area_busy_servers / self.sim_time
-            server_utilization = avg_busy_servers / node.num_servers 
+            server_utilization = avg_busy_servers / node.num_servers if node.num_servers > 0 else 0.0
 
             print(f"\nNode {node_id} - {node.name}:")
             print(f"  Completed Packets: {node.completed_packets}")
@@ -149,6 +163,7 @@ class SimulationEngine:
 
 if __name__ == "__main__":
     sim_duration = 10000.0  # Simulation duration in milliseconds
-    max_packets = 200  # Maximum number of packets to process
-    sim_engine = SimulationEngine(nodes_dict, sim_duration = sim_duration, max_packets = max_packets)
+    max_packets = None  # Maximum number of packets to process
+    max_nodes = len(nodes_dict)  # Maximum number of nodes for testing purposes
+    sim_engine = SimulationEngine(nodes_dict, sim_duration = sim_duration, max_packets = max_packets, max_nodes = max_nodes)
     sim_engine.run()

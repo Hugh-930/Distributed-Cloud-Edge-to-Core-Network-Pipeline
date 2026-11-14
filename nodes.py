@@ -18,6 +18,7 @@ class Packet:
     current_node_id: int
     system_arrival_time: float
     current_node_arrival_time: float = 0.0
+    is_suspect: bool = False  # Flag to indicate the packet failed inspection at Node 2 
 
 
 @dataclass(order=True)
@@ -45,15 +46,16 @@ class BaseNode:
         completed_packets: int = 0,
         rng: Optional[np.random.Generator] = None,
         capacity: Optional[float] = float("inf"),
-        latencies: Optional[List[float]] = None
+        upstream_nodes: Optional[List[int]] = None,
     ):
         self.node_id = node_id
         self.name = name
         self.num_servers = num_servers
         self.completed_packets = completed_packets
-        self.rng = rng if rng is not None else np.random.default_rng(seed=SEED+node_id)
+        self.rng = rng if rng is not None else np.random.default_rng(seed=SEED+node_id*100)
         self.capacity = capacity  # Finite buffer limit K (inf for unbounded queues)
-        self.latencies = latencies if latencies is not None else [] # List to store latencies for statistical analysis
+        self.latencies = [] # List to store latencies for statistical analysis
+        self.upstream_nodes = upstream_nodes if upstream_nodes is not None else [] # List of upstream node IDs for FEL updates when the buffer is full
 
         # Dynamic state variables
         self.busy_servers: int = 0
@@ -99,12 +101,12 @@ class Node1(BaseNode):
         mean_ms: float = 4.0,
         std_ms: float = 1.2,
         rng: Optional[np.random.Generator] = None,
-        arrival_rng: Optional[np.random.Generator] = np.random.default_rng(seed=SEED+1),
+        arrival_rng: Optional[np.random.Generator] = None,
     ):
         super().__init__(node_id=1, name="Node 1: Ingress Edge Router", num_servers=num_servers, rng=rng)
         self.mean_ms = mean_ms
         self.std_ms = std_ms
-        self.arrival_rng = arrival_rng 
+        self.arrival_rng = arrival_rng if arrival_rng is not None else np.random.default_rng(seed=SEED+1)
 
         # Convert log-normal mean (4.0 ms) and std (1.2 ms) to normal parameters (mu_N, sigma_N)
         variance = self.std_ms ** 2
@@ -140,7 +142,7 @@ class Node1(BaseNode):
         service_time = self.rng.lognormal(mean=self.mu_normal, sigma=self.sigma_normal)
         return float(service_time)  
 
-    def select_next_node(self) -> int:
+    def select_next_node(self, packet: Packet) -> int:
         """All packets from Node 1 are forwarded to Node 2 (Deep Packet Inspection)."""
         return 2
 
@@ -160,13 +162,13 @@ class Node2(BaseNode):
         service_rate_per_ms: float = 0.5,
         clean_prob: float = 0.90,
         rng: Optional[np.random.Generator] = None,
-        routing_rng: Optional[np.random.Generator] = np.random.default_rng(seed=SEED+2),
+        routing_rng: Optional[np.random.Generator] = None,
     ):
         super().__init__(node_id=2, name="Node 2: DPI & Firewall", num_servers=num_servers, rng=rng)
         self.service_rate_per_ms = service_rate_per_ms
         self.mean_service_ms = 1.0 / service_rate_per_ms
         self.clean_prob = clean_prob
-        self.routing_rng = routing_rng
+        self.routing_rng = routing_rng if routing_rng is not None else np.random.default_rng(seed=SEED+2)
 
         self.blocked_packets: List[Packet] = []
         self.blocking_events_count: int = 0
@@ -184,3 +186,62 @@ class Node2(BaseNode):
             packet.is_suspect = True
             return 6
 
+
+class Node3(BaseNode):
+    """
+    Node 3: Central Load Balancer (M/G/s/K Finite-Buffer Queue)
+    - Buffer Capacity: K = 15 packets. Upstream nodes: 2,6
+    - Servers: s3 = 4 distribution threads.
+    - Service Time: Triangular distribution (min=1.0, mode=2.0, max=4.0 ms).
+    - f(x):
+        f(x) = 2/3(x - 1) for 1 <= x <= 2
+        f(x) = 2/3(4 - x) for 2 < x
+    - F(x):
+        F(x) = 1/3(x - 1)^2 for 1 <= x <= 2
+        F(x) = 1 - 1/3(4 - x)^2 for 2 < x <= 4
+    - X = 1 + sqrt(3u) for 0 <= u <= 1/3
+    - X = 4 - sqrt(3(1 - u)) for 1/3 < u <= 1
+    - Routing: 60% -> Node 4 (Cluster A)
+               40% -> Node 5 (Cluster B).
+    """
+
+    def __init__(
+        self,
+        num_servers: int = 4,
+        capacity: int = 15,
+        left_ms: float = 1.0,
+        mode_ms: float = 2.0,
+        right_ms: float = 4.0,
+        cluster_a_prob: float = 0.60,
+        rng: Optional[np.random.Generator] = None,
+        routing_rng: Optional[np.random.Generator] = None,
+        upstream_nodes: Optional[List[int]] = [2, 6]
+    ):
+        super().__init__(
+            node_id=3,
+            name="Node 3: Central Load Balancer",
+            num_servers=num_servers,
+            rng=rng,
+            capacity=capacity,
+            upstream_nodes=upstream_nodes
+        )
+        self.left_ms = left_ms
+        self.mode_ms = mode_ms
+        self.right_ms = right_ms
+        self.cluster_a_prob = cluster_a_prob
+        self.routing_rng = routing_rng if routing_rng is not None else np.random.default_rng(seed=SEED+3)
+
+    def sample_service_time(self) -> float:
+        a, c, b = self.left_ms, self.mode_ms, self.right_ms
+        u = self.rng.uniform(0.0, 1.0)
+        split_point = (c - a) / (b - a)
+        if u <= split_point:
+            return float(a + np.sqrt(u * (b - a) * (c - a)))
+        else:
+            return float(b - np.sqrt((1.0 - u) * (b - a) * (b - c)))
+
+    def select_next_node(self, packet: Packet) -> int:
+        if self.routing_rng.uniform(0.0, 1.0) < self.cluster_a_prob:
+            return 4
+        else:
+            return 5
