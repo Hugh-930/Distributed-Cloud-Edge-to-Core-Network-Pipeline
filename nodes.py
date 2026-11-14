@@ -16,8 +16,9 @@ class Packet:
     """
     packet_id: int
     current_node_id: int
-    system_arrival_time: float
-    current_node_arrival_time: float = 0.0
+    system_arrival_time: float # used for latency calculations from end to end
+    node_arrival_time: float = 0.0 # used for latency calculations at each node
+    node_service_start_time: float = 0.0 # used for queue waiting time calculations at each node
     is_suspect: bool = False  # Flag to indicate the packet failed inspection at Node 2 
 
 
@@ -55,6 +56,7 @@ class BaseNode:
         self.rng = rng if rng is not None else np.random.default_rng(seed=SEED+node_id*100)
         self.capacity = capacity  # Finite buffer limit K (inf for unbounded queues)
         self.latencies = [] # List to store latencies for statistical analysis
+        self.queue_wait_times = [] # List to store waiting times in queue for statistical analysis
         self.upstream_nodes = upstream_nodes if upstream_nodes is not None else [] # List of upstream node IDs for FEL updates when the buffer is full
 
         # Dynamic state variables
@@ -170,10 +172,6 @@ class Node2(BaseNode):
         self.clean_prob = clean_prob
         self.routing_rng = routing_rng if routing_rng is not None else np.random.default_rng(seed=SEED+2)
 
-        self.blocked_packets: List[Packet] = []
-        self.blocking_events_count: int = 0
-        self.total_routing_attempts_to_n3: int = 0
-
     def sample_service_time(self) -> float:
         u = self.rng.uniform(0.0, 1.0)
         return float(-self.mean_service_ms * np.log(1.0 - u))
@@ -245,3 +243,62 @@ class Node3(BaseNode):
             return 4
         else:
             return 5
+
+class Node4(BaseNode):
+    """
+    Node 4: Cluster A (G/G/s Queue)
+    - Servers: s4 = 5  CPU worker threads.
+    - Service Time: Weibull distribution (α = 1.5,β = 6.0 ms).
+    - Routing: 100% -> Node 7 (Database Ingestion).;
+    """
+
+    def __init__(
+        self,
+        num_servers: int = 5,
+        service_shape: float = 1.5,
+        service_scale: float = 6.0,
+        rng: Optional[np.random.Generator] = None,
+        routing_rng: Optional[np.random.Generator] = None,
+    ):
+        super().__init__(node_id=4, name="Node 4: Cluster A", num_servers=num_servers, rng=rng)
+        self.service_shape = service_shape
+        self.service_scale = service_scale
+        self.routing_rng = routing_rng if routing_rng is not None else np.random.default_rng(seed=SEED+4)
+
+    def sample_service_time(self) -> float:
+        u = self.rng.uniform(0.0, 1.0)
+        return float(self.service_scale * (-np.log(1.0 - u)) ** (1.0 / self.service_shape))
+
+    def select_next_node(self, packet: Packet) -> int:
+        return 7 
+
+class Node5(BaseNode):
+    """
+    Node 5: Cluster B (G/G/s Queue)
+    - Servers: s5 = 3 GPU execution units
+    - Service Time: Erlang-k distribution (k = 3,µ = 8.0 ms).
+    - Routing: 100% -> Node 7 (Database Ingestion).
+    """
+
+    def __init__(
+        self,
+        num_servers: int = 3,
+        service_shape: float = 3,
+        service_mean: float = 8.0,
+        rng: Optional[np.random.Generator] = None,
+        routing_rng: Optional[np.random.Generator] = None,
+    ):
+        super().__init__(node_id=5, name="Node 5: Cluster B", num_servers=num_servers, rng=rng)
+        self.service_shape = service_shape
+        self.service_mean = service_mean
+        self.routing_rng = routing_rng if routing_rng is not None else np.random.default_rng(seed=SEED+5)
+
+    def sample_service_time(self) -> float:
+        temp_sum = 0.0
+        for _ in range(self.service_shape):
+            u = self.rng.uniform(0.0, 1.0)
+            temp_sum += np.log(1.0 - u)
+        return float(-(self.service_mean / self.service_shape) * temp_sum)
+
+    def select_next_node(self, packet: Packet) -> int:
+        return 7

@@ -1,14 +1,15 @@
 import heapq
 from typing import List 
-from nodes import Packet, Event, Node1, Node2, Node3
+import numpy as np
+from nodes import Packet, Event, Node1, Node2, Node3, Node4, Node5
 
 
 nodes_dict = {
     1: Node1(),
     2: Node2(),
     3: Node3(),
-    # 4: Node4(),
-    # 5: Node5(),
+    4: Node4(),
+    5: Node5(),
     # 6: Node6(),
     # 7: Node7(),
     # 8: Node8(),
@@ -75,6 +76,10 @@ class SimulationEngine:
         Schedules the next arrival and either starts service or queues the packet."""
 
         node_id = packet.current_node_id
+
+        # only for testing purposes, ignore arrivals for nodes that don't exist
+        if node_id not in self.nodes:
+            return
         node = self.nodes[node_id]
 
         # schedule the next arrival only for Node 1
@@ -87,6 +92,7 @@ class SimulationEngine:
         if node.has_free_server():
             node.busy_servers += 1
             serv_time = node.sample_service_time()
+            packet.node_service_start_time = self.sim_time
             self.schedule_event(self.sim_time + serv_time, "DEPARTURE", packet)
         else:
             node.queue.append(packet)
@@ -100,14 +106,16 @@ class SimulationEngine:
         node = self.nodes[node_id]
         node.completed_packets += 1
 
-        latency = self.sim_time - packet.current_node_arrival_time
+        latency = self.sim_time - packet.node_arrival_time
         node.latencies.append(latency)
+        time_in_queue = packet.node_service_start_time - packet.node_arrival_time
+        node.queue_wait_times.append(time_in_queue)
 
         if node_id < self.max_nodes:
             # Move the packet to the next node, update its info
-            packet.current_node_arrival_time = self.sim_time
-            packet.current_node_id += 1  # Move to the next node
-            packet.current_node_arrival_time = self.sim_time
+            packet.node_arrival_time = self.sim_time
+            packet.current_node_id = node.select_next_node(packet)  # Move to the next node
+            packet.node_arrival_time = self.sim_time
             self.handle_arrival(packet)
         else:
             # Packet has completed processing through all nodes
@@ -115,6 +123,7 @@ class SimulationEngine:
 
         if node.queue:
             next_pkt = node.queue.pop(0)
+            next_pkt.node_service_start_time = self.sim_time
             serv_time = node.sample_service_time()
             self.schedule_event(self.sim_time + serv_time, "DEPARTURE", next_pkt)
         else:
@@ -145,10 +154,11 @@ class SimulationEngine:
         """Prints a summary report of the simulation results."""
         print("\nSimulation Report:")
         for node_id, node in self.nodes.items():
-            avg_queue_waiting_time = node.area_num_in_queue / self.sim_time if self.sim_time > 0 else 0.0 # W_q
-            avg_time_in_system = node.area_num_in_system / self.sim_time if self.sim_time > 0 else 0.0 # W
+            avg_queue_waiting_time = np.mean(node.queue_wait_times) # W_q
+            avg_time_in_system = np.mean(node.latencies) # W
             avg_num_in_queue = node.area_num_in_queue / self.sim_time # L_q
-            avg_num_in_system = node.area_num_in_system / self.sim_time
+            avg_num_in_system = node.area_num_in_system / self.sim_time # L
+            throughput = node.completed_packets / self.sim_time # lambda
             avg_busy_servers = node.area_busy_servers / self.sim_time
             server_utilization = avg_busy_servers / node.num_servers if node.num_servers > 0 else 0.0
 
@@ -158,6 +168,7 @@ class SimulationEngine:
             print(f"  Average Time in System: {avg_time_in_system:.4f}")
             print(f"  Average Number in Queue: {avg_num_in_queue:.4f}")
             print(f"  Average Number in System: {avg_num_in_system:.4f}")
+            print(f"  Throughput: {throughput:.4f}")
             print(f"  Average Active Servers: {avg_busy_servers:.4f}")
             print(f"  Server Utilization: {server_utilization:.4f}")
 
